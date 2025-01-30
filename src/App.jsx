@@ -4,8 +4,13 @@ import { Application, Assets, Container, Sprite } from "pixi.js";
 import io from "socket.io-client";
 import "./App.css";
 
-const socket = io("https://api.upskillmafia.com/", {
-  path: "/socket.io/",
+// const socket = io("https://api.upskillmafia.com/", {
+//   path: "/socket.io/",
+//   transports: ["websocket"],
+// });
+
+const socket = io("http://localhost:4005/", {
+  // path: "/socket.io/",
   transports: ["websocket"],
 });
 
@@ -13,24 +18,32 @@ function App() {
   const [username, setUsername] = useState("");
   const [room, setRoom] = useState("");
   const [isJoined, setIsJoined] = useState(false);
-  const [players, setPlayers] = useState([]);
+  const [players, setPlayers] = useState({});
+  const [positions, setPositions] = useState({});
 
   const gameRef = useRef(null);
   const appRef = useRef(null);
   const playerSpritesRef = useRef({});
 
   useEffect(() => {
-    socket.on("players", (updatedPlayers) => {
-      setPlayers(updatedPlayers);
-      updateSprites(updatedPlayers);
+    socket.on("joinedPlayers", (data) => {
+      console.log(data.players, data.positions);
+      setPlayers(data.players);
+      setPositions(data.positions);
+      // updateSprites();
     });
 
     socket.on("playerMoved", ({ id, position }) => {
       if (playerSpritesRef.current[id]) {
         const sprite = playerSpritesRef.current[id];
+        sprite.position.set(position.x, position.y);
+      }
+    });
 
-        sprite._position.x += position.x;
-        sprite._position.y += position.y;
+    socket.on("playerTeleported", ({ id, position }) => {
+      if (playerSpritesRef.current[id]) {
+        const sprite = playerSpritesRef.current[id];
+        sprite.position.set(position.x, position.y);
       }
     });
 
@@ -50,6 +63,10 @@ function App() {
       socket.off("playerLeft");
     };
   }, []);
+
+  useEffect(() => {
+    updateSprites();
+  }, [players, positions]);
 
   const handleKeyDown = (e) => {
     let direction;
@@ -75,7 +92,12 @@ function App() {
     }
 
     if (direction) {
-      socket.emit("move", direction);
+      socket.emit("move", {
+        uid: username,
+        dx: direction.x,
+        dy: direction.y,
+        room: "",
+      });
     }
   };
 
@@ -94,23 +116,48 @@ function App() {
 
       // Handle movement
       window.addEventListener("keydown", handleKeyDown);
+      app.canvas.addEventListener("dblclick", (event) => {
+        const rect = app.canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+
+        console.log("Double Click Detected at:", x, y);
+
+        // Emit teleport event
+        socket.emit("teleport", {
+          uid: username,
+          x,
+          y,
+          room: "",
+        });
+      });
     }
   };
 
-  const updateSprites = (players) => {
-    players.forEach(async (player) => {
-      if (!playerSpritesRef.current[player.socket]) {
+  const updateSprites = () => {
+    Object.entries(players).forEach(([, player]) => {
+      const playerPosition = positions[player.socket_id];
+
+      if (!playerPosition) return;
+
+      if (!playerSpritesRef.current[player.socket_id]) {
         const container = new Container();
         appRef.current.stage.addChild(container);
-        const texture = await Assets.load(
-          "https://pixijs.com/assets/bunny.png"
-        );
-        // console.log(player)
-        const bunny = new Sprite(texture);
-        container.x = player.position.x;
-        container.y = player.position.y;
-        container.addChild(bunny);
-        playerSpritesRef.current[player.socket] = container;
+
+        Assets.load("https://pixijs.com/assets/bunny.png").then((texture) => {
+          const bunny = new Sprite(texture);
+          bunny.anchor.set(0.5);
+          container.addChild(bunny);
+
+          container.x = playerPosition.x;
+          container.y = playerPosition.y;
+
+          playerSpritesRef.current[player.socket_id] = container;
+        });
+      } else {
+        const spriteContainer = playerSpritesRef.current[player.socket_id];
+        spriteContainer.x = playerPosition.x;
+        spriteContainer.y = playerPosition.y;
       }
     });
   };
@@ -120,7 +167,13 @@ function App() {
     if (username && room) {
       setIsJoined(true);
       await initGame();
-      socket.emit("join", { username, room });
+      socket.emit("join", {
+        username,
+        uid: username,
+        role: "admin",
+        avatar: 1,
+        profilePic: `https://ui-avatars.com/api/?name=${username}&background=random`,
+      });
     }
   };
 
@@ -147,8 +200,8 @@ function App() {
           <div className="dashboard">
             <h2>Players</h2>
             <ul>
-              {players.map((player) => (
-                <li key={player._id}>{player.username}</li>
+              {Object.entries(players).map(([uid, player]) => (
+                <li key={uid}>{player.username}</li>
               ))}
             </ul>
           </div>
